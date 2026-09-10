@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ft_irc — Contrato Client entre la capa de red y la lógica IRC",
+    "output": "irc-client-contract.html",
+    "quality_profile": "showcase",
+    "viewBox": [1276, 660],
+    "views": [
+      { "id": "camino-entrada", "label": "Camino de entrada", "focus": ["irccli", "listener", "server", "client", "handler"], "note": "Del socket al comando: recv() acumula bytes y extractLine() entrega comandos completos." },
+      { "id": "camino-salida", "label": "Camino de salida", "focus": ["handler", "channels", "client", "server", "irccli"], "note": "La lógica solo encola; el siguiente ciclo de poll() es quien escribe en el socket." },
+      { "id": "seams", "label": "Los dos seams", "focus": ["server", "client", "handler"], "note": "ICommandHandler baja de red a lógica; IServerContext sube de lógica a red." }
+    ]
+  },
+  "components": [
+    { "id": "oper", "type": "security", "label": "Privilegios de operador", "sublabel": "KICK · INVITE · TOPIC · MODE", "pos": [1010, 40], "size": [196, 72] },
+    { "id": "listener", "type": "cloud", "label": "Socket de escucha", "sublabel": "socket + bind + listen", "pos": [340, 220], "size": [180, 72], "tag": "O_NONBLOCK" },
+    { "id": "channels", "type": "messagebus", "label": "Canales", "sublabel": "miembros, topic, modos", "pos": [1010, 220], "size": [196, 72] },
+    { "id": "irccli", "type": "external", "label": "Cliente IRC", "sublabel": "irssi / nc", "pos": [40, 400], "size": [150, 72] },
+    { "id": "server", "type": "backend", "label": "Server", "sublabel": "poll() + registro fd → Client*", "pos": [340, 400], "size": [180, 72], "tag": "Parte 1" },
+    { "id": "client", "type": "database", "label": "Client", "sublabel": "buffers + estado lógico", "pos": [680, 400], "size": [176, 72], "tag": "Client.hpp" },
+    { "id": "handler", "type": "backend", "label": "CommandHandler", "sublabel": "parseo y despacho", "pos": [1010, 400], "size": [196, 72], "tag": "Parte 2" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Parte 1 · Red y core del servidor", "wraps": ["listener", "server"] },
+    { "kind": "region", "label": "Estado compartido", "wraps": ["client"] },
+    { "kind": "region", "label": "Parte 2 · Protocolo IRC y comandos", "wraps": ["handler", "channels", "oper"] }
+  ],
+  "connections": [
+    { "id": "conecta", "from": "irccli", "to": "listener", "label": "connect() :6667", "fromSide": "top", "toSide": "left", "via": [[115, 256]] },
+    { "id": "acepta", "from": "listener", "to": "server", "label": "accept() → new Client(fd, host)", "labelAt": [430, 346] },
+    { "id": "lee", "from": "server", "to": "client", "label": "recv() → appendToReadBuffer()", "variant": "emphasis", "labelAt": [655, 372] },
+    { "id": "envia", "from": "client", "to": "server", "label": "POLLOUT → send() + consumeWriteBuffer()", "labelAt": [768, 500] },
+    { "id": "despacha", "from": "client", "to": "handler", "label": "extractLine() → execute()", "variant": "emphasis", "labelAt": [1010, 372] },
+    { "id": "responde", "from": "handler", "to": "client", "label": "enqueue(respuesta)", "labelAt": [1010, 500] },
+    { "id": "devuelve", "from": "server", "to": "irccli", "label": "respuesta CRLF", "labelAt": [265, 500] },
+    { "id": "canaliza", "from": "handler", "to": "channels", "label": "JOIN / PART / PRIVMSG", "labelAt": [1108, 346] },
+    { "id": "valida-op", "from": "channels", "to": "oper", "label": "comprueba +o del emisor", "variant": "security", "labelAt": [1108, 166] },
+    { "id": "retransmite", "from": "channels", "to": "client", "label": "broadcast a cada miembro", "variant": "dashed", "fromSide": "left", "toSide": "top", "via": [[930, 256], [930, 330], [768, 330]] },
+    { "id": "baja", "from": "server", "to": "handler", "label": "onClientDisconnect() antes del delete", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom", "via": [[430, 530], [1108, 530]] },
+    { "id": "busca-nick", "from": "handler", "to": "server", "label": "IServerContext: findClientByNick()", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom", "via": [[1108, 580], [430, 580]] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Parte 1 · Red", "items": ["socket + bind + listen + fcntl(O_NONBLOCK)", "Un solo poll(); recv() llega fragmentado", "POLLOUT solo si hasPendingOutput()"] },
+    { "dot": "emerald", "title": "Parte 2 · Protocolo", "items": ["Comandos completos y ya sin CRLF", "PASS → NICK → USER antes de todo lo demás", "Responde y retransmite solo con enqueue()"] },
+    { "dot": "violet", "title": "Client · reglas del contrato", "items": ["Cada capa escribe solo sus propios campos", "onClientDisconnect() antes del delete", "La lógica nunca llama a send(), recv() ni close()"] }
+  ]
+}
