@@ -1,17 +1,18 @@
 /* ************************************************************************** */
 /*                                                                            */
-/*   Numerics.hpp                                                            */
-/*                                                                            */
-/*   Codigos de respuesta numerica de IRC (RFC 1459 / 2812) usados por la    */
-/*   Parte 2. Ni logica ni funciones aqui: solo el vocabulario que usaran    */
-/*   CommandHandler y Channel al construir las respuestas al cliente.        */
+/*                                                        :::      ::::::::   */
+/*   Numerics.hpp                                       :+:      :+:    :+:   */
+/*                                                    +:+ +:+         +:+     */
+/*   By: ruortiz- <ruortiz-@student.42.fr>          +#+  +:+       +#+        */
+/*                                                +#+#+#+#+#+   +#+           */
+/*   Created: 2026/09/12 19:57:07 by ruortiz-          #+#    #+#             */
+/*   Updated: 2026/09/12 19:58:21 by ruortiz-         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
 #ifndef NUMERICS_HPP
 # define NUMERICS_HPP
 
-/* Subconjunto de RFC 1459 / 2812 realmente usado por ft_irc. */
 enum Numeric
 {
 	RPL_WELCOME          = 1,    /* registro completado                    */
