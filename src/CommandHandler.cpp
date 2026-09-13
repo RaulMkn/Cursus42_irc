@@ -168,6 +168,32 @@ Channel	*CommandHandler::findChannel(const std::string &name) const
 	return (it->second);
 }
 
+Channel	*CommandHandler::getOrCreateChannel(const std::string &name)
+{
+	Channel	*channel = findChannel(name);
+
+	if (channel)
+		return (channel);
+	channel = new Channel(name);
+	_channels[name] = channel;
+	return (channel);
+}
+
+void	CommandHandler::removeClientFromChannel(Client &client, Channel &channel,
+			const std::string &leaveMessage)
+{
+	std::string	name = channel.getName();
+
+	channel.broadcast(leaveMessage);
+	channel.removeMember(&client);
+	client.removeChannel(name);
+	if (channel.empty())
+	{
+		_channels.erase(name);
+		delete &channel;
+	}
+}
+
 /* ------------------------------- registration -------------------------------- */
 
 void	CommandHandler::cmdPass(Client &client, const std::vector<std::string> &params)
@@ -257,4 +283,145 @@ void	CommandHandler::cmdQuit(Client &client, const std::vector<std::string> &par
 	std::string	reason = params.empty() ? "Client Quit" : params[0];
 
 	client.markForClose(reason);
+}
+
+/* ------------------------- channel membership / messaging -------------------- */
+
+void	CommandHandler::cmdJoin(Client &client, const std::vector<std::string> &params)
+{
+	if (params.empty())
+		return (client.enqueue(numericReply(ERR_NEEDMOREPARAMS, client,
+			"JOIN :Not enough parameters")));
+
+	const std::string	&name = params[0];
+	std::string			key = params.size() > 1 ? params[1] : "";
+
+	if (name.empty() || name[0] != '#')
+		return (client.enqueue(numericReply(ERR_NOSUCHCHANNEL, client, name + " :No such channel")));
+
+	Channel	*existing = findChannel(name);
+
+	if (existing)
+	{
+		if (existing->isMember(&client))
+			return ;
+		if (existing->isInviteOnly() && !existing->isInvited(&client))
+			return (client.enqueue(numericReply(ERR_INVITEONLYCHAN, client,
+				name + " :Cannot join channel (+i)")));
+		if (existing->hasKey() && existing->getKey() != key)
+			return (client.enqueue(numericReply(ERR_BADCHANNELKEY, client,
+				name + " :Cannot join channel (+k)")));
+		if (existing->hasLimit() && existing->getMembers().size() >= existing->getLimit())
+			return (client.enqueue(numericReply(ERR_CHANNELISFULL, client,
+				name + " :Cannot join channel (+l)")));
+	}
+
+	bool		isNew = (existing == 0);
+	Channel		*channel = getOrCreateChannel(name);
+	std::string	announcement = client.prefix() + " JOIN :" + name;
+
+	channel->addMember(&client);
+	client.addChannel(name);
+	channel->clearInvite(&client);
+	if (isNew)
+		channel->addOperator(&client);
+	channel->broadcast(announcement);
+
+	if (channel->getTopic().empty())
+		client.enqueue(numericReply(RPL_NOTOPIC, client, name + " :No topic is set"));
+	else
+		client.enqueue(numericReply(RPL_TOPIC, client, name + " :" + channel->getTopic()));
+
+	std::string							names;
+	const std::set<Client *>			&members = channel->getMembers();
+	std::set<Client *>::const_iterator	it;
+
+	for (it = members.begin(); it != members.end(); ++it)
+	{
+		if (!names.empty())
+			names += " ";
+		if (channel->isOperator(*it))
+			names += "@";
+		names += (*it)->getNick();
+	}
+	client.enqueue(numericReply(RPL_NAMREPLY, client, "= " + name + " :" + names));
+	client.enqueue(numericReply(RPL_ENDOFNAMES, client, name + " :End of /NAMES list"));
+}
+
+void	CommandHandler::cmdPart(Client &client, const std::vector<std::string> &params)
+{
+	if (params.empty())
+		return (client.enqueue(numericReply(ERR_NEEDMOREPARAMS, client,
+			"PART :Not enough parameters")));
+
+	Channel	*channel = findChannel(params[0]);
+
+	if (!channel)
+		return (client.enqueue(numericReply(ERR_NOSUCHCHANNEL, client,
+			params[0] + " :No such channel")));
+	if (!channel->isMember(&client))
+		return (client.enqueue(numericReply(ERR_NOTONCHANNEL, client,
+			params[0] + " :You're not on that channel")));
+
+	std::string	reason = params.size() > 1 ? params[1] : client.getNick();
+	std::string	announcement = client.prefix() + " PART " + params[0] + " :" + reason;
+
+	removeClientFromChannel(client, *channel, announcement);
+}
+
+void	CommandHandler::cmdPrivmsg(Client &client, const std::vector<std::string> &params)
+{
+	if (params.empty())
+		return (client.enqueue(numericReply(ERR_NORECIPIENT, client,
+			":No recipient given (PRIVMSG)")));
+	if (params.size() < 2 || params[1].empty())
+		return (client.enqueue(numericReply(ERR_NOTEXTTOSEND, client, ":No text to send")));
+
+	const std::string	&target = params[0];
+	const std::string	&text = params[1];
+	std::string			line = client.prefix() + " PRIVMSG " + target + " :" + text;
+
+	if (target[0] == '#')
+	{
+		Channel	*channel = findChannel(target);
+
+		if (!channel)
+			return (client.enqueue(numericReply(ERR_NOSUCHCHANNEL, client,
+				target + " :No such channel")));
+		if (!channel->isMember(&client))
+			return (client.enqueue(numericReply(ERR_CANNOTSENDTOCHAN, client,
+				target + " :Cannot send to channel")));
+		return (channel->broadcast(line, &client));
+	}
+
+	Client	*recipient = _context.findClientByNick(target);
+
+	if (!recipient)
+		return (client.enqueue(numericReply(ERR_NOSUCHNICK, client,
+			target + " :No such nick/channel")));
+	recipient->enqueue(line);
+}
+
+void	CommandHandler::cmdNotice(Client &client, const std::vector<std::string> &params)
+{
+	if (params.size() < 2 || params[0].empty() || params[1].empty())
+		return ;
+
+	const std::string	&target = params[0];
+	const std::string	&text = params[1];
+	std::string			line = client.prefix() + " NOTICE " + target + " :" + text;
+
+	if (target[0] == '#')
+	{
+		Channel	*channel = findChannel(target);
+
+		if (channel && channel->isMember(&client))
+			channel->broadcast(line, &client);
+		return ;
+	}
+
+	Client	*recipient = _context.findClientByNick(target);
+
+	if (recipient)
+		recipient->enqueue(line);
 }
