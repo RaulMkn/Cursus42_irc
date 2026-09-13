@@ -1,4 +1,5 @@
 #include <cctype>
+#include <cstdlib>
 #include <set>
 #include <sstream>
 
@@ -424,4 +425,220 @@ void	CommandHandler::cmdNotice(Client &client, const std::vector<std::string> &p
 
 	if (recipient)
 		recipient->enqueue(line);
+}
+
+/* ------------------------------- operator commands ---------------------------- */
+
+void	CommandHandler::cmdTopic(Client &client, const std::vector<std::string> &params)
+{
+	if (params.empty())
+		return (client.enqueue(numericReply(ERR_NEEDMOREPARAMS, client,
+			"TOPIC :Not enough parameters")));
+
+	Channel	*channel = findChannel(params[0]);
+
+	if (!channel)
+		return (client.enqueue(numericReply(ERR_NOSUCHCHANNEL, client,
+			params[0] + " :No such channel")));
+	if (!channel->isMember(&client))
+		return (client.enqueue(numericReply(ERR_NOTONCHANNEL, client,
+			params[0] + " :You're not on that channel")));
+
+	if (params.size() < 2)
+	{
+		if (channel->getTopic().empty())
+			return (client.enqueue(numericReply(RPL_NOTOPIC, client,
+				params[0] + " :No topic is set")));
+		return (client.enqueue(numericReply(RPL_TOPIC, client,
+			params[0] + " :" + channel->getTopic())));
+	}
+
+	if (channel->isTopicRestricted() && !channel->isOperator(&client))
+		return (client.enqueue(numericReply(ERR_CHANOPRIVSNEEDED, client,
+			params[0] + " :You're not channel operator")));
+
+	channel->setTopic(params[1]);
+	channel->broadcast(client.prefix() + " TOPIC " + params[0] + " :" + params[1]);
+}
+
+void	CommandHandler::cmdKick(Client &client, const std::vector<std::string> &params)
+{
+	if (params.size() < 2)
+		return (client.enqueue(numericReply(ERR_NEEDMOREPARAMS, client,
+			"KICK :Not enough parameters")));
+
+	Channel	*channel = findChannel(params[0]);
+
+	if (!channel)
+		return (client.enqueue(numericReply(ERR_NOSUCHCHANNEL, client,
+			params[0] + " :No such channel")));
+	if (!channel->isMember(&client))
+		return (client.enqueue(numericReply(ERR_NOTONCHANNEL, client,
+			params[0] + " :You're not on that channel")));
+	if (!channel->isOperator(&client))
+		return (client.enqueue(numericReply(ERR_CHANOPRIVSNEEDED, client,
+			params[0] + " :You're not channel operator")));
+
+	Client	*target = _context.findClientByNick(params[1]);
+
+	if (!target || !channel->isMember(target))
+		return (client.enqueue(numericReply(ERR_USERNOTINCHANNEL, client,
+			params[1] + " " + params[0] + " :They aren't on that channel")));
+
+	std::string	reason = params.size() > 2 ? params[2] : client.getNick();
+	std::string	announcement = client.prefix() + " KICK " + params[0] + " "
+		+ params[1] + " :" + reason;
+
+	removeClientFromChannel(*target, *channel, announcement);
+}
+
+void	CommandHandler::cmdInvite(Client &client, const std::vector<std::string> &params)
+{
+	if (params.size() < 2)
+		return (client.enqueue(numericReply(ERR_NEEDMOREPARAMS, client,
+			"INVITE :Not enough parameters")));
+
+	Client	*target = _context.findClientByNick(params[0]);
+
+	if (!target)
+		return (client.enqueue(numericReply(ERR_NOSUCHNICK, client,
+			params[0] + " :No such nick/channel")));
+
+	Channel	*channel = findChannel(params[1]);
+
+	if (!channel)
+		return (client.enqueue(numericReply(ERR_NOSUCHCHANNEL, client,
+			params[1] + " :No such channel")));
+	if (!channel->isMember(&client))
+		return (client.enqueue(numericReply(ERR_NOTONCHANNEL, client,
+			params[1] + " :You're not on that channel")));
+	if (channel->isInviteOnly() && !channel->isOperator(&client))
+		return (client.enqueue(numericReply(ERR_CHANOPRIVSNEEDED, client,
+			params[1] + " :You're not channel operator")));
+	if (channel->isMember(target))
+		return (client.enqueue(numericReply(ERR_USERONCHANNEL, client,
+			params[0] + " " + params[1] + " :is already on channel")));
+
+	channel->invite(target);
+	client.enqueue(numericReply(RPL_INVITING, client, params[0] + " " + params[1]));
+	target->enqueue(client.prefix() + " INVITE " + params[0] + " :" + params[1]);
+}
+
+void	CommandHandler::cmdMode(Client &client, const std::vector<std::string> &params)
+{
+	if (params.size() < 2)
+		return (client.enqueue(numericReply(ERR_NEEDMOREPARAMS, client,
+			"MODE :Not enough parameters")));
+
+	Channel	*channel = findChannel(params[0]);
+
+	if (!channel)
+		return (client.enqueue(numericReply(ERR_NOSUCHCHANNEL, client,
+			params[0] + " :No such channel")));
+	if (!channel->isOperator(&client))
+		return (client.enqueue(numericReply(ERR_CHANOPRIVSNEEDED, client,
+			params[0] + " :You're not channel operator")));
+
+	const std::string	&modes = params[1];
+	std::size_t			argIndex = 2;
+	bool				adding = true;
+	std::string			appliedFlags;
+	std::string			appliedArgs;
+
+	for (std::size_t i = 0; i < modes.size(); ++i)
+	{
+		char	flag = modes[i];
+
+		if (flag == '+')
+		{
+			adding = true;
+			continue ;
+		}
+		if (flag == '-')
+		{
+			adding = false;
+			continue ;
+		}
+		if (flag == 'i')
+		{
+			channel->setInviteOnly(adding);
+			appliedFlags += adding ? "+i" : "-i";
+		}
+		else if (flag == 't')
+		{
+			channel->setTopicRestricted(adding);
+			appliedFlags += adding ? "+t" : "-t";
+		}
+		else if (flag == 'k')
+		{
+			if (adding)
+			{
+				if (argIndex >= params.size())
+					continue ;
+				channel->setKey(params[argIndex]);
+				appliedArgs += " " + params[argIndex];
+				++argIndex;
+			}
+			else
+				channel->clearKey();
+			appliedFlags += adding ? "+k" : "-k";
+		}
+		else if (flag == 'l')
+		{
+			if (adding)
+			{
+				if (argIndex >= params.size())
+					continue ;
+				channel->setLimit(static_cast<std::size_t>(std::atoi(params[argIndex].c_str())));
+				appliedArgs += " " + params[argIndex];
+				++argIndex;
+			}
+			else
+				channel->clearLimit();
+			appliedFlags += adding ? "+l" : "-l";
+		}
+		else if (flag == 'o')
+		{
+			if (argIndex >= params.size())
+				continue ;
+
+			Client	*target = _context.findClientByNick(params[argIndex]);
+
+			if (target && channel->isMember(target))
+			{
+				if (adding)
+					channel->addOperator(target);
+				else
+					channel->removeOperator(target);
+				appliedFlags += adding ? "+o" : "-o";
+				appliedArgs += " " + params[argIndex];
+			}
+			++argIndex;
+		}
+		else
+			client.enqueue(numericReply(ERR_UNKNOWNMODE, client,
+				std::string(1, flag) + " :is unknown mode char to me"));
+	}
+
+	if (!appliedFlags.empty())
+		channel->broadcast(client.prefix() + " MODE " + params[0] + " "
+			+ appliedFlags + appliedArgs);
+}
+
+/* ---------------------------------- disconnect --------------------------------- */
+
+void	CommandHandler::onClientDisconnect(Client &client)
+{
+	std::set<std::string>					channels = client.getChannels();
+	std::set<std::string>::const_iterator	it;
+	std::string								announcement = client.prefix()
+		+ " QUIT :" + client.getQuitReason();
+
+	for (it = channels.begin(); it != channels.end(); ++it)
+	{
+		Channel	*channel = findChannel(*it);
+
+		if (channel)
+			removeClientFromChannel(client, *channel, announcement);
+	}
 }
