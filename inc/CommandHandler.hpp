@@ -35,6 +35,10 @@ class CommandHandler : public ICommandHandler
 		std::string	numericReply(int code, const Client &client,
 						const std::string &text) const;
 
+		/* ---- registration helpers ---- */
+		bool	isValidNick(const std::string &nick) const;
+		void	maybeCompleteRegistration(Client &client);
+
 		/* ---- registration ---- */
 		void	cmdPass(Client &client, const std::vector<std::string> &params);
 		void	cmdNick(Client &client, const std::vector<std::string> &params);
