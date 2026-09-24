@@ -143,12 +143,12 @@ bool	CommandHandler::isValidNick(const std::string &nick) const
 
 void	CommandHandler::maybeCompleteRegistration(Client &client)
 {
-	if (client.getState() != PASS_OK)
+	if (client.getState() != Client::PASS_OK)
 		return ;
 	if (client.getNick().empty() || client.getUser().empty())
 		return ;
 
-	client.setState(REGISTERED);
+	client.setState(Client::REGISTERED);
 	client.enqueue(numericReply(RPL_WELCOME, client,
 		":Welcome to the Internet Relay Network " + client.prefix()));
 	client.enqueue(numericReply(RPL_YOURHOST, client,
@@ -210,8 +210,8 @@ void	CommandHandler::cmdPass(Client &client, const std::vector<std::string> &par
 		client.enqueue(numericReply(ERR_PASSWDMISMATCH, client, ":Password incorrect"));
 		return (client.markForClose("Bad password"));
 	}
-	if (client.getState() == HANDSHAKE)
-		client.setState(PASS_OK);
+	if (client.getState() == Client::HANDSHAKE)
+		client.setState(Client::PASS_OK);
 }
 
 void	CommandHandler::cmdNick(Client &client, const std::vector<std::string> &params)
